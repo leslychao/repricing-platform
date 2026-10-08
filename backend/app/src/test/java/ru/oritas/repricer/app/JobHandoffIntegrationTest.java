@@ -108,7 +108,7 @@ class JobHandoffIntegrationTest {
   void handoffPreservesOneJobAndCheckpointAndHonorsDueTimeAndGlobalCanonicalCapacity()
       throws Exception {
     Scope scope = scope();
-    Instant due = Instant.now().plusSeconds(5).truncatedTo(ChronoUnit.MICROS);
+    AtomicReference<Instant> due = new AtomicReference<>();
     BlockingQueue<Invocation> fetched = new LinkedBlockingQueue<>();
     BlockingQueue<Invocation> canonical = new LinkedBlockingQueue<>();
     Semaphore release = new Semaphore(0);
@@ -119,7 +119,7 @@ class JobHandoffIntegrationTest {
           checkpoint(runtime, context);
           if (context.lane().equals("fetch")) {
             fetched.add(new Invocation(runtime, context));
-            return JobOutcome.handoff("canonicalization", due);
+            return JobOutcome.handoff("canonicalization", due.get());
           }
           int concurrent = running.incrementAndGet();
           maximum.accumulateAndGet(concurrent, Math::max);
@@ -135,6 +135,7 @@ class JobHandoffIntegrationTest {
         };
     try (Worker first = worker(action);
         Worker second = worker(action)) {
+      due.set(Instant.now().plusSeconds(5).truncatedTo(ChronoUnit.MICROS));
       List<UUID> ids = new ArrayList<>();
       for (int index = 0; index < 3; index++) {
         String payload = "{\"source\":\"immutable-" + index + "\"}";
@@ -148,10 +149,10 @@ class JobHandoffIntegrationTest {
       first.runtime().claim();
       List<Invocation> fetches = List.of(take(fetched), take(fetched), take(fetched));
       await(() -> states(scope).stream().allMatch(state -> state.state().equals("WAITING")));
-      assertTrue(Instant.now().isBefore(due), "Fixture must reach the not-yet-due boundary");
+      assertTrue(Instant.now().isBefore(due.get()), "Fixture must reach the not-yet-due boundary");
       for (JobState state : states(scope)) {
         assertEquals("canonicalization", state.lane());
-        assertEquals(due, state.due());
+        assertEquals(due.get(), state.due());
         assertEquals(0, state.attempt());
         assertEquals(1, state.fence());
         assertEquals("42", state.checkpoint());
@@ -160,7 +161,7 @@ class JobHandoffIntegrationTest {
       second.runtime().claim();
       assertTrue(canonical.isEmpty(), "Future handoff must not be claimed early");
       assertTrue(states(scope).stream().allMatch(state -> state.state().equals("WAITING")));
-      await(() -> !Instant.now().isBefore(due));
+      await(() -> !Instant.now().isBefore(due.get()));
       first.runtime().claim();
       Invocation firstCanonical = take(canonical);
       Invocation secondCanonical = take(canonical);
