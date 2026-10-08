@@ -1,0 +1,12 @@
+deploy/.env.local
+deploy/.env.dev
+**/target/
+**/node_modules/
+**/dist/
+**/.angular/
+**/.cache/
+.idea/
+*.log
+.runtime/
+test-results/
+playwright-report/

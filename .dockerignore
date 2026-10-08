@@ -1,0 +1,10 @@
+.git
+.idea
+.runtime
+**/node_modules
+**/target
+**/dist
+**/.angular
+deploy/.env.*
+!deploy/.env.*.example
+**/*.log

@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: repricer
+  datasource:
+    hikari:
+      maximum-pool-size: ${DATABASE_POOL_SIZE:10}
+      minimum-idle: 1
+      connection-timeout: 3000
+      validation-timeout: 2000
+  liquibase:
+    change-log: classpath:db/changelog/master.xml
+    url: ${MIGRATION_DATASOURCE_URL:}
+    user: ${MIGRATION_DATASOURCE_USERNAME:}
+    password: ${MIGRATION_DATASOURCE_PASSWORD:}
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 101MB
+      file-size-threshold: 0
+  mail:
+    properties:
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 10000
+      mail.smtp.writetimeout: 10000
+server:
+  port: 8080
+  forward-headers-strategy: none
+  max-http-request-header-size: 16KB
+  tomcat:
+    threads:
+      max: 50
+    max-part-count: 8
+    connection-timeout: 10s
+  error:
+    include-message: never
+    include-stacktrace: never
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+repricer:
+  mail:
+    from: ${MAIL_FROM}
+  mode: ${APP_MODE:api}
+  public-base-url: ${PUBLIC_BASE_URL}
+  oidc:
+    issuer: ${OIDC_ISSUER_URI}
+    jwks: ${OIDC_JWK_SET_URI}
+    audience: ${OIDC_AUDIENCE}
+    logout-url: ${KEYCLOAK_LOGOUT_URL}
+  oauth2-proxy-url: ${OAUTH2_PROXY_URL}
+  vault:
+    address: ${VAULT_ADDR}
+    token-file: ${VAULT_TOKEN_FILE}
+  s3:
+    endpoint: ${S3_ENDPOINT}
+    region: ${S3_REGION}
+    bucket: ${S3_BUCKET}
+    access-key: ${S3_ACCESS_KEY}
+    secret-key: ${S3_SECRET_KEY}

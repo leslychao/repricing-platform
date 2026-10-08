@@ -1,0 +1,42 @@
+import { RealtimeService } from '../core/realtime.service';
+import { ViewRefresh } from '../core/view-refresh';
+import { Component, DestroyRef, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { ApiService, dateTime, decimal, errorMessage } from '../core/api.service';
+import { ContextService } from '../core/context.service';
+import { Decision, QuantityComparison } from '../core/models';
+import { IconComponent } from './icon.component';
+
+@Component({selector:'app-quantity-comparison',imports:[FormsModule,IconComponent],template:`
+  <section class="panel"><header class="panel-head"><app-icon name="chart" /><h2>При каком объёме выгоднее</h2></header><div class="panel-body">
+    <p class="inline-note">Условное сравнение оставленных покупок при неизменных входах решения. Без оценки спроса, частоты возвратов и резервирования товара.</p>
+    @if(error()){<div class="notice error" role="alert">{{error()}}</div>}
+    <form (ngSubmit)="calculate()"><div class="fields-2"><label class="field">Размещение<select name="placement" [(ngModel)]="placement" required><option value="">Выберите размещение</option>@for(id of decision().placements;track id){<option [value]="id">{{id}}</option>}</select></label><label class="field">Базовое количество<input type="number" name="quantity" min="1" max="1000000" step="1" required [(ngModel)]="quantity"></label></div><button class="btn" type="submit" [disabled]="busy()||!placement||!context.allows('finance.read')||!context.allows('decision.preview')">Сохранить новый расчёт количества</button></form>
+    @if(selected();as saved){<p class="inline-note">Сохранено {{date(saved.createdAt)}} · {{saved.baselineQuantity}} базовых покупок</p>@if(saved.stockObservedAt){<p class="inline-note">Остаток получен {{date(saved.stockObservedAt)}} · редакция {{saved.stockRevision}}</p>}<details><summary>Редакции исходных данных</summary>@for(source of revisions();track source[0]){<div class="data-pair"><span>{{source[0]}}</span><strong>{{source[1]}}</strong></div>}</details>
+      <div class="data-pair"><span>Прибыль одной покупки · текущие условия</span><strong>{{money(saved.baselineUnitProfit)}}</strong></div><div class="data-pair"><span>Прибыль одной покупки · выбранный вариант</span><strong>{{money(saved.candidateUnitProfit)}}</strong></div><div class="data-pair"><span>Подтверждённый доступный остаток</span><strong>{{money(saved.availableQuantity,' ед.')}}</strong></div>
+      @if(saved.comparison;as comparison){<div class="data-pair"><span>Базовый денежный результат</span><strong>{{money(comparison.baselineResult)}}</strong></div><div class="data-pair"><span>Минимальное целое количество выбранного варианта</span><strong>{{threshold(saved)}}</strong></div><div class="data-pair"><span>Изменение количества до порога</span><strong>{{money(comparison.relativeQuantityChangePercent,'%')}}</strong></div><p class="inline-note">{{comparison.reachableWithStock===undefined?'Достижимость по остатку не подтверждена.':comparison.reachableWithStock?'Порог не превышает сохранённый доступный остаток.':'Порог превышает сохранённый доступный остаток.'}}</p>@if(comparison.hypotheticalBaseline){<div class="notice">Базовое количество больше доступного остатка. База является гипотетической.</div>}
+        <table class="comparison-table"><thead><tr><th>Покупок</th><th>Результат варианта</th><th>Разница с базой</th></tr></thead><tbody>@for(scenario of comparison.scenarios;track scenario.quantity){<tr><td>{{scenario.quantity}}</td><td>{{money(scenario.result)}}</td><td>{{money(scenario.difference)}}</td></tr>}</tbody></table>
+      }@else{<div class="notice">{{reason(saved.reason)}}</div>}
+    }@else if(!error()){<p role="status">{{loading()?'Загружаем сохранённые сравнения…':'Сравнение количества ещё не сохранялось.'}}</p>}
+    @if(history().length){<label class="field">История расчётов<select [ngModel]="selected()?.id" (ngModelChange)="select($event)">@for(item of history();track item.id){<option [value]="item.id">{{date(item.createdAt)}} · {{item.baselineQuantity}} покупок · {{item.placementId||'Размещение не выбрано'}}</option>}</select></label><div class="pagination"><button class="btn" [disabled]="page()===0||loading()" (click)="changePage(-1)">Назад</button><span>{{page()+1}} · {{total()}} записей</span><button class="btn" [disabled]="(page()+1)*50>=total()||loading()" (click)="changePage(1)">Далее</button></div>}
+  </div></section>
+`,styles:`form{margin:18px 0}.comparison-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:12px;font-variant-numeric:tabular-nums}.comparison-table th,.comparison-table td{padding:12px 7px;border-bottom:1px solid var(--line);text-align:right}.comparison-table th:first-child,.comparison-table td:first-child{text-align:left}.pagination{margin-top:12px}`})
+export class QuantityComparisonComponent {
+  private readonly reads = new ViewRefresh(inject(DestroyRef));
+
+  readonly decision=input.required<Decision>();readonly context=inject(ContextService);
+  private readonly realtime=inject(RealtimeService);private readonly api=inject(ApiService);private readonly id=computed(()=>this.decision().id);
+  readonly selected=signal<QuantityComparison|null>(null);readonly history=signal<QuantityComparison[]>([]);
+  readonly error=signal('');readonly busy=signal(false);readonly loading=signal(false);
+  readonly revisions=computed(()=>Object.entries(this.selected()?.sourceRevisions??{}));readonly page=signal(0);readonly total=signal(0);readonly money=decimal;
+  readonly date=(value:string)=>dateTime(value,this.context.account()?.timezone??'UTC');
+  placement='';quantity=100;private epoch=0;
+  constructor(){effect(onCleanup=>{this.id();this.context.identity();this.context.permissions();untracked(()=>{this.epoch++;this.selected.set(null);this.history.set([]);this.page.set(0);this.placement=this.decision().placements.length===1?this.decision().placements[0]:'';const stop=this.realtime.subscribe(['decisions'],async()=>{await this.load();return !this.error();},false,{owner:this.reads,key:'load'});onCleanup(stop);});});inject(DestroyRef).onDestroy(()=>this.epoch++);}
+  load():Promise<void>{this.epoch++;return this.reads.run('load',()=>this.loadCurrent(),()=>!this.error());}
+  private async loadCurrent():Promise<void>{const epoch=++this.epoch;this.loading.set(true);try{const result=await this.api.listQuantityComparisons({path:{id:this.id()},query:{page:this.page(),size:50}});if(epoch!==this.epoch)return;this.history.set(result.items);this.total.set(result.total);this.selected.update(previous=>previous?(result.items.find(item=>item.id===previous.id)??previous):(result.items[0]??null));this.error.set('');}catch(error:unknown){if(epoch===this.epoch)this.error.set(errorMessage(error));}finally{if(epoch===this.epoch)this.loading.set(false);}}
+  async calculate():Promise<void>{if(this.busy())return;this.busy.set(true);const epoch=this.epoch;try{const result=await this.api.compareQuantity({path:{id:this.id()},body:{clientRequestId:crypto.randomUUID(),placementId:this.placement,quantity:this.quantity}});if(epoch!==this.epoch)return;this.selected.set(result);this.history.update(items=>[result,...items].slice(0,50));this.total.update(value=>value+1);this.page.set(0);this.error.set('');}catch(error:unknown){if(epoch===this.epoch)this.error.set(errorMessage(error));}finally{this.busy.set(false);}}
+  select(id:string):void{this.selected.set(this.history().find(item=>item.id===id)??null);}
+  changePage(delta:number):void{this.selected.set(null);this.page.update(value=>value+delta);void this.load();}
+  threshold(value:QuantityComparison):string{const result=value.comparison;if(!result)return 'Недостаточно данных';if(result.thresholdStatus==='NO_FINITE_THRESHOLD')return 'Конечного порога нет';if(result.thresholdStatus==='LIMIT_EXCEEDED')return 'Порог выше 1 000 000';return String(result.threshold);}
+  reason(code:string):string{const labels:Readonly<Record<string,string>>={EXPLICIT_PLACEMENT_REQUIRED:'Выберите конкретное размещение для сравнения.',BASELINE_NOT_CONFIRMED:'Текущие условия не подтверждены.',NO_SELECTED_CANDIDATE:'В решении нет выбранного допустимого варианта.',PROPORTIONAL_VOLUME_NOT_CONFIRMED:'Не подтверждена пропорциональность расходов количеству. Расходы на заказ, отправление или день не умножаются на количество покупок.',ECONOMICS_UNCONFIRMED:'Не подтверждены все обязательные экономические входы.'};return labels[code]??'Недостаточно подтверждённых входов: '+code;}
+}

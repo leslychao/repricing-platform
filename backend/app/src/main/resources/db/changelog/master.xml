@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+  <include file="db/changelog/platform.sql"/>
+  <include file="db/changelog/platform-outbox-pressure.sql"/>
+  <include file="db/changelog/platform-multipart-checksums.sql"/>
+  <include file="db/changelog/platform-job-control.sql"/>
+  <include file="db/changelog/access.sql"/>
+  <include file="db/changelog/marketplace.sql"/>
+  <include file="db/changelog/marketplace-catalog-evidence.sql"/>
+  <include file="db/changelog/marketplace-shipments.sql"/>
+  <include file="db/changelog/marketplace-profile-evidence.sql"/>
+  <include file="db/changelog/marketplace-ozon-finance.sql"/>
+  <include file="db/changelog/marketplace-competitors.sql"/>
+  <include file="db/changelog/marketplace-yandex-warehouses.sql"/>
+  <include file="db/changelog/marketplace-physical-stock.sql"/>
+  <include file="db/changelog/marketplace-categories.sql"/>
+  <include file="db/changelog/marketplace-stage-retention.sql"/>
+  <include file="db/changelog/economics.sql"/>
+  <include file="db/changelog/economics-sales-pace.sql"/>
+  <include file="db/changelog/economics-pace-refresh.sql"/>
+  <include file="db/changelog/automation.sql"/>
+  <include file="db/changelog/automation-economics-projection.sql"/>
+  <include file="db/changelog/automation-quantity-comparison.sql"/>
+  <include file="db/changelog/automation-assignment-batch.sql"/>
+  <include file="db/changelog/app.sql"/>
+  <include file="db/changelog/files.sql"/>
+  <include file="db/changelog/report-upload.sql"/>
+  <include file="db/changelog/organization-exports.sql"/>
+  <include file="db/changelog/selection-lifecycle.sql"/>
+  <include file="db/changelog/job-references.sql"/>
+  <include file="db/changelog/platform-metadata-retention.sql"/>
+  <include file="db/changelog/access-audit-offer.sql"/>
+  <include file="db/changelog/runtime-grants.sql"/>
+  <include file="db/changelog/recognition-upgrade.sql"/>
+</databaseChangeLog>

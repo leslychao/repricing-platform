@@ -1,0 +1,77 @@
+{
+  "realm": "repricer",
+  "enabled": true,
+  "displayName": "Repricer",
+  "loginTheme": "repricer",
+  "internationalizationEnabled": true,
+  "supportedLocales": ["ru"],
+  "defaultLocale": "ru",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "verifyEmail": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 43200,
+  "attributes": {"repricerManaged": "true"},
+  "clients": [{
+    "clientId": "repricer",
+    "name": "Repricer",
+    "protocol": "openid-connect",
+    "enabled": true,
+    "publicClient": false,
+    "secret": "${OIDC_CLIENT_SECRET}",
+    "standardFlowEnabled": true,
+    "implicitFlowEnabled": false,
+    "directAccessGrantsEnabled": false,
+    "serviceAccountsEnabled": false,
+    "consentRequired": false,
+    "redirectUris": ["${PUBLIC_BASE_URL}/oauth2/callback"],
+    "webOrigins": ["${PUBLIC_BASE_URL}"],
+    "attributes": {
+      "pkce.code.challenge.method": "S256",
+      "post.logout.redirect.uris": "${PUBLIC_BASE_URL}/login",
+      "backchannel.logout.session.required": "true"
+    },
+    "defaultClientScopes": ["profile", "email"],
+    "protocolMappers": [{
+      "name": "repricer-audience",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "config": {
+        "included.client.audience": "repricer",
+        "id.token.claim": "false",
+        "access.token.claim": "true"
+      }
+    }]
+  }],
+  "users": [
+    {
+      "id": "5b4db533-c13d-400e-bb00-555c913e9d05",
+      "username": "test",
+      "email": "test@repricer.local",
+      "firstName": "Тестовый",
+      "lastName": "Пользователь",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {"repricerManaged": ["true"]},
+      "credentials": [{"type": "password", "value": "${KEYCLOAK_TEST_PASSWORD}", "temporary": false}]
+    },
+    {
+      "id": "c0674d41-d12a-4437-895b-0409e09b60f4",
+      "username": "admin",
+      "email": "admin@repricer.local",
+      "firstName": "Администратор",
+      "lastName": "Приложения",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {"repricerManaged": ["true"]},
+      "credentials": [{"type": "password", "value": "${KEYCLOAK_APP_ADMIN_PASSWORD}", "temporary": false}]
+    }
+  ]
+}

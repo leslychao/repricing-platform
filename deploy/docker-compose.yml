@@ -1,0 +1,312 @@
+name: repricer-${STAND:?Select STAND in the env file}
+
+x-app-environment: &app-environment
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/repricer
+  MIGRATION_DATASOURCE_URL: jdbc:postgresql://postgres:5432/repricer
+  OIDC_ISSUER_URI: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL required}/auth/realms/repricer
+  OIDC_JWK_SET_URI: http://keycloak:8080/auth/realms/repricer/protocol/openid-connect/certs
+  OIDC_AUDIENCE: repricer
+  OAUTH2_PROXY_URL: http://oauth2-proxy:4180
+  KEYCLOAK_LOGOUT_URL: http://keycloak:8080/auth/realms/repricer/protocol/openid-connect/logout
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL required}
+  VAULT_ADDR: http://vault:8200
+  VAULT_TOKEN_FILE: /run/repricer/vault-token
+  S3_ENDPOINT: http://s3:8333
+  S3_REGION: us-east-1
+  S3_BUCKET: repricer
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY required}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY required}
+  SPRING_MAIL_HOST: mailpit
+  SPRING_MAIL_PORT: "1025"
+  MAIL_FROM: ${MAIL_FROM:?MAIL_FROM required}
+  BOOTSTRAP_TEST_SUBJECT: 5b4db533-c13d-400e-bb00-555c913e9d05
+  BOOTSTRAP_ADMIN_SUBJECT: c0674d41-d12a-4437-895b-0409e09b60f4
+
+services:
+  postgres:
+    image: repricer-postgres:0.1.0
+    build: {context: .., dockerfile: deploy/postgres/Dockerfile}
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      API_DB_PASSWORD: ${API_DB_PASSWORD:?API_DB_PASSWORD required}
+      WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD:?WORKER_DB_PASSWORD required}
+      MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?MIGRATION_DB_PASSWORD required}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD required}
+    volumes: [postgres:/var/lib/postgresql/data]
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d repricer"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    mem_limit: 2g
+
+  keycloak:
+    image: repricer-keycloak:0.1.0
+    build: {context: .., dockerfile: deploy/keycloak/Dockerfile}
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD required}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:?KC_BOOTSTRAP_ADMIN_USERNAME required}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?KC_BOOTSTRAP_ADMIN_PASSWORD required}
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HOSTNAME: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL required}/auth
+      KC_PROXY_HEADERS: xforwarded
+      KC_PROXY_TRUSTED_ADDRESSES: ${DOCKER_AUTH_CIDR:?DOCKER_AUTH_CIDR required}
+      KC_HEALTH_ENABLED: "true"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL required}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?OIDC_CLIENT_SECRET required}
+      KEYCLOAK_TEST_PASSWORD: ${KEYCLOAK_TEST_PASSWORD:?KEYCLOAK_TEST_PASSWORD required}
+      KEYCLOAK_APP_ADMIN_PASSWORD: ${KEYCLOAK_APP_ADMIN_PASSWORD:?KEYCLOAK_APP_ADMIN_PASSWORD required}
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [database, auth]
+    healthcheck:
+      test: [CMD-SHELL, "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /auth/health/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3; grep -q '200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+    restart: unless-stopped
+    mem_limit: 1500m
+
+  keycloak-provision:
+    image: repricer-keycloak-provision:0.1.0
+    build: {context: .., dockerfile: deploy/keycloak/provision.Dockerfile}
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:?KC_BOOTSTRAP_ADMIN_USERNAME required}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?KC_BOOTSTRAP_ADMIN_PASSWORD required}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL required}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?OIDC_CLIENT_SECRET required}
+      KEYCLOAK_TEST_PASSWORD: ${KEYCLOAK_TEST_PASSWORD:?KEYCLOAK_TEST_PASSWORD required}
+      KEYCLOAK_APP_ADMIN_PASSWORD: ${KEYCLOAK_APP_ADMIN_PASSWORD:?KEYCLOAK_APP_ADMIN_PASSWORD required}
+    depends_on: {keycloak: {condition: service_healthy}}
+    networks: [auth]
+    restart: "no"
+    mem_limit: 128m
+
+  redis:
+    image: redis:8.2.1-alpine@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD required}
+    command: [sh, -ec, 'exec redis-server --save "" --appendonly no --requirepass "$$REDIS_PASSWORD"']
+    networks: [sessions]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 256m
+
+  oauth2-proxy:
+    image: repricer-oauth2-proxy:0.1.0
+    build: {context: .., dockerfile: deploy/oauth2-proxy/Dockerfile}
+    environment:
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL required}/auth/realms/repricer
+      OAUTH2_PROXY_SKIP_OIDC_DISCOVERY: "true"
+      OAUTH2_PROXY_LOGIN_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL required}/auth/realms/repricer/protocol/openid-connect/auth
+      OAUTH2_PROXY_REDEEM_URL: http://keycloak:8080/auth/realms/repricer/protocol/openid-connect/token
+      OAUTH2_PROXY_OIDC_JWKS_URL: http://keycloak:8080/auth/realms/repricer/protocol/openid-connect/certs
+      OAUTH2_PROXY_PROFILE_URL: http://keycloak:8080/auth/realms/repricer/protocol/openid-connect/userinfo
+      OAUTH2_PROXY_CLIENT_ID: repricer
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?OIDC_CLIENT_SECRET required}
+      OAUTH2_PROXY_REDIRECT_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL required}/oauth2/callback
+      OAUTH2_PROXY_CODE_CHALLENGE_METHOD: S256
+      OAUTH2_PROXY_INSECURE_OIDC_SKIP_NONCE: "false"
+      OAUTH2_PROXY_SCOPE: openid profile email
+      OAUTH2_PROXY_EMAIL_DOMAINS: '*'
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_SESSION_STORE_TYPE: redis
+      OAUTH2_PROXY_REDIS_CONNECTION_URL: redis://redis:6379/0
+      OAUTH2_PROXY_REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD required}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_COOKIE_SECRET:?OAUTH2_COOKIE_SECRET required}
+      OAUTH2_PROXY_COOKIE_SECURE: ${COOKIE_SECURE:?COOKIE_SECURE required}
+      OAUTH2_PROXY_COOKIE_HTTPONLY: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_COOKIE_PATH: /
+      OAUTH2_PROXY_COOKIE_EXPIRE: 30m
+      OAUTH2_PROXY_COOKIE_REFRESH: 4m
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+      OAUTH2_PROXY_SET_AUTHORIZATION_HEADER: "true"
+      OAUTH2_PROXY_PASS_BASIC_AUTH: "false"
+      OAUTH2_PROXY_UPSTREAMS: static://202
+      OAUTH2_PROXY_REQUEST_LOGGING: "false"
+      OAUTH2_PROXY_SHOW_DEBUG_ON_ERROR: "false"
+      OAUTH2_PROXY_CUSTOM_TEMPLATES_DIR: /templates
+    depends_on:
+      keycloak-provision: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    networks: [auth, sessions]
+    restart: unless-stopped
+    mem_limit: 256m
+
+  vault:
+    image: repricer-vault:0.1.0
+    build: {context: .., dockerfile: deploy/vault/Dockerfile}
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+    volumes: [vault:/vault/raft, vault-bootstrap:/vault/bootstrap, vault-runtime:/vault/runtime]
+    networks: [secrets]
+    healthcheck:
+      test: [CMD, vault, status]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    mem_limit: 512m
+
+  s3:
+    image: chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        mkdir -p /data/m9333
+        chown seaweed:seaweed /data/m9333
+        umask 077
+        for credential in "$$AWS_ACCESS_KEY_ID" "$$AWS_SECRET_ACCESS_KEY"; do
+          if [ -z "$$credential" ] || [ "$$(printf '%s' "$$credential" | LC_ALL=C tr -d '\040-\176' | wc -c)" -ne 0 ]; then
+            echo 'S3 credentials must be nonempty printable ASCII' >&2
+            exit 1
+          fi
+        done
+        access_key=$$(printf '%s' "$$AWS_ACCESS_KEY_ID" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        secret_key=$$(printf '%s' "$$AWS_SECRET_ACCESS_KEY" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf '{"identities":[{"name":"repricer","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin"]}]}\n' "$$access_key" "$$secret_key" > /tmp/repricer-s3.json
+        chown seaweed:seaweed /tmp/repricer-s3.json
+        unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY access_key secret_key credential
+        exec /entrypoint.sh server -dir=/data -master.dir=/data/m9333 -ip=127.0.0.1 -ip.bind=127.0.0.1 -filer -s3 -s3.config=/tmp/repricer-s3.json -s3.ip.bind=0.0.0.0 -s3.port.iceberg=0 -s3.port.lance=0 -s3.iam=false -s3.readerCacheSizeMB=128 -master.telemetry=false -master.volumeSizeLimitMB=1024 -volume.max=0 -s3.allowDeleteBucketNotEmpty=false
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?S3_ACCESS_KEY required}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY required}
+      S3_BUCKET: repricer
+    volumes: [s3:/data]
+    networks: [objects]
+    healthcheck:
+      test: [CMD-SHELL, 'test "$$(curl --silent --max-time 2 --output /dev/null --write-out "%{http_code}" http://127.0.0.1:8333/)" = 403']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    mem_limit: 1g
+
+  mailpit:
+    image: axllent/mailpit:v1.27.8@sha256:6abc8e633df15eaf785cfcf38bae48e66f64beecdc03121e249d0f9ec15f0707
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_UI_BIND_ADDR: 127.0.0.1:8025
+      MP_SMTP_BIND_ADDR: 0.0.0.0:1025
+      MP_MAX_MESSAGES: "1000"
+    volumes: [mailpit:/data]
+    networks: [mail]
+    restart: unless-stopped
+    mem_limit: 128m
+
+  api:
+    image: repricer-backend:0.1.0
+    build: {context: .., dockerfile: backend/Dockerfile}
+    environment:
+      <<: *app-environment
+      APP_MODE: api
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx1g
+      SPRING_DATASOURCE_USERNAME: repricer_api
+      SPRING_DATASOURCE_PASSWORD: ${API_DB_PASSWORD:?API_DB_PASSWORD required}
+      MIGRATION_DATASOURCE_USERNAME: repricer_migrator
+      MIGRATION_DATASOURCE_PASSWORD: ${MIGRATION_DB_PASSWORD:?MIGRATION_DB_PASSWORD required}
+    volumes: [vault-runtime:/run/repricer:ro]
+    depends_on:
+      postgres: {condition: service_healthy}
+      keycloak-provision: {condition: service_completed_successfully}
+      vault: {condition: service_healthy}
+      s3: {condition: service_healthy}
+      mailpit: {condition: service_started}
+    networks: [application, database, auth, secrets, objects, mail, outbound]
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1:8080/actuator/health']
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 30s
+    restart: unless-stopped
+    mem_limit: 1500m
+
+  worker:
+    image: repricer-backend:0.1.0
+    environment:
+      <<: *app-environment
+      APP_MODE: worker
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx2g
+      SPRING_DATASOURCE_USERNAME: repricer_worker
+      SPRING_DATASOURCE_PASSWORD: ${WORKER_DB_PASSWORD:?WORKER_DB_PASSWORD required}
+      SPRING_LIQUIBASE_ENABLED: "false"
+    volumes: [vault-runtime:/run/repricer:ro]
+    depends_on: {api: {condition: service_healthy}}
+    networks: [database, auth, secrets, objects, mail, outbound]
+    restart: unless-stopped
+    mem_limit: 3g
+
+  frontend:
+    image: repricer-frontend:0.1.0
+    build: {context: .., dockerfile: frontend/Dockerfile}
+    networks: [web]
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1/']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 128m
+
+  gateway:
+    image: repricer-gateway:0.1.0
+    build: {context: .., dockerfile: deploy/nginx/Dockerfile}
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL required}
+      TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:?TRUSTED_PROXY_CIDR required}
+      GATEWAY_ALLOWED_CIDR: ${GATEWAY_ALLOWED_CIDR:?GATEWAY_ALLOWED_CIDR required}
+    ports: ["${GATEWAY_BIND:?GATEWAY_BIND required}:${GATEWAY_PORT:?GATEWAY_PORT required}:8080"]
+    depends_on:
+      api: {condition: service_healthy}
+      frontend: {condition: service_healthy}
+      oauth2-proxy: {condition: service_started}
+    networks: [application, auth, web, ingress]
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 128m
+
+networks:
+  database: {internal: true}
+  application: {internal: true}
+  auth:
+    internal: true
+    ipam:
+      config: [{subnet: "${DOCKER_AUTH_CIDR:?DOCKER_AUTH_CIDR required}"}]
+  sessions: {internal: true}
+  secrets: {internal: true}
+  objects: {internal: true}
+  mail: {internal: true}
+  web: {internal: true}
+  ingress: {}
+  outbound: {}
+
+volumes:
+  postgres:
+  vault:
+  vault-bootstrap:
+  vault-runtime:
+  s3:
+  mailpit:
